@@ -1,54 +1,41 @@
 package main
 
 import (
-    "fmt"
-    "sync"
-    "sync/atomic"
+	"fmt"
+	"sync"
 )
 
-// Шаг наращивания счётчика
 const step int64 = 1
-
-// Конечное значение счетчика
-const endCounterValue int64 = 1000
-
-// Количество горутин
-const goroutinesCount int = 10
+const iterationAmount int64 = 1000 // используем int64 для согласованности
 
 func main() {
+	var counter int64 = 0
+	var completedIterations int64 = 0 // отслеживает количество выполненных итераций
+	var c = sync.NewCond(&sync.Mutex{})
 
-    var counter int64 = 0
-    var wg sync.WaitGroup
-    
-    // Функция инкремента, которая будет выполняться каждой горутиной
-    // Каждая горутина будет увеличивать счётчик на 100 (1000 / 10)
-    increment := func() {
-        defer wg.Done()
-        // Вычисляем, сколько раз нужно увеличить счётчик для достижения результата 1000
-        // при использовании 10 горутин: 1000 / 10 = 100
-        incrementsPerGoroutine := endCounterValue / int64(goroutinesCount)
-        
-        for i := int64(0); i < incrementsPerGoroutine; i++ {
-            atomic.AddInt64(&counter, step)
-        }
-    }
-    
-    // Запускаем 10 горутин
-    for i := 1; i <= goroutinesCount; i++ {
-        wg.Add(1)
-        go increment()
-    }
-    
-    // Ожидаем завершения всех горутин
-    wg.Wait()
-    
-    // Печатаем результат
-    fmt.Printf("Результат: %d\n", counter)
-    
-    // Проверяем, что результат равен 1000
-    if counter == endCounterValue {
-        fmt.Println("Успешно! Счётчик равен 1000")
-    } else {
-        fmt.Printf("Ошибка! Ожидалось %d, получено %d\n", endCounterValue, counter)
-    }
+	increment := func() {
+		c.L.Lock() // захватываем мьютекс перед изменением разделяемых данных
+		counter += step
+		completedIterations++
+		
+		// проверяем, достигли ли мы целевого количества итераций
+		if completedIterations == iterationAmount {
+			c.Broadcast() // уведомляем все ожидающие горутины
+		}
+		c.L.Unlock() // освобождаем мьютекс
+	}
+
+	// запускаем горутины для инкремента
+	for i := int64(1); i <= iterationAmount; i++ {
+		go increment()
+	}
+
+	// ждем, пока счетчик не достигнет целевого значения
+	c.L.Lock()
+	for completedIterations < iterationAmount { // динамическая проверка условия
+		c.Wait() // ожидаем сигнала от одной из горутин
+	}
+	c.L.Unlock()
+
+	fmt.Printf("Счетчик достиг значения: %d\n", counter)
 }
